@@ -103,6 +103,12 @@ namespace MMI_SP
         private readonly static string _dbFilePath = AppDomain.CurrentDomain.BaseDirectory + "\\MMI\\db.xml";
         private XElement _dbFile; // Avoid loading the file for every request
 
+        // Lock to serialize db.xml reads/writes. SHVDN runs scripts on a shared
+        // threadpool task scheduler; without this lock, multiple scripts can call
+        // SaveDBFile in quick succession and XElement.Save throws WinIOError on
+        // the second writer.
+        private static readonly object _dbLock = new object();
+
         /// <summary>
         /// Raised when a vehicle is insured.
         /// Out: vehicle
@@ -162,13 +168,17 @@ namespace MMI_SP
             doc.Save(file.FullName);
         }
         /// <summary>
-        /// Saves the current database to a file.
+        /// Saves the current database to a file. Serialized via _dbLock so
+        /// concurrent scripts (Agency + iFruit) cannot collide on the write.
         /// </summary>
         private void SaveDBFile()
         {
-            if (!File.Exists(_dbFilePath))
-                CreateDBFile();
-            _dbFile.Save(_dbFilePath);
+            lock (_dbLock)
+            {
+                if (!File.Exists(_dbFilePath))
+                    CreateDBFile();
+                _dbFile.Save(_dbFilePath);
+            }
         }
 
 

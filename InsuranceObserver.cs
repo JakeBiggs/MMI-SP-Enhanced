@@ -364,23 +364,29 @@ namespace MMI_SP
         /// </summary>
         private void UpdateIncomingVehicles()
         {
+            // Defer removals so CannotBringVehicle / driver-arrived paths don't mutate
+            // the list mid-enumeration (would throw InvalidOperationException).
+            List<IncomingVehicle> toRemove = null;
+
             for (int i = IncomingVehicles.Count - 1; i >= 0; i--)
             {
                 IncomingVehicle incoming = IncomingVehicles[i];
 
-                if (incoming.vehicle.CurrentBlip.Sprite == BlipSprite.ArmsTraffickingAir ||
+                if (incoming.vehicle.CurrentBlip != null &&
+                    (incoming.vehicle.CurrentBlip.Sprite == BlipSprite.ArmsTraffickingAir ||
                     incoming.vehicle.CurrentBlip.Sprite == BlipSprite.Tank ||
                     incoming.vehicle.CurrentBlip.Sprite == BlipSprite.Speedboat ||
-                    incoming.vehicle.CurrentBlip.Sprite == BlipSprite.GunCar)
+                    incoming.vehicle.CurrentBlip.Sprite == BlipSprite.GunCar))
                     incoming.vehicle.CurrentBlip.Rotation = (int)incoming.vehicle.Rotation.Z;
 
                 // If the driver destroyed the vehicle, we refund the player
                 if (incoming.vehicle.IsDead)
                 {
                     CannotBringVehicle(incoming, InsuranceManager.GetVehicleInsuranceCost(incoming.vehicle, InsuranceManager.Multiplier.Recover));
+                    (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
                     break;
                 }
-                
+
                 // The driver is in the vehicle and has arrived
                 if (incoming.vehicle.Model.IsHelicopter)
                 {
@@ -388,6 +394,7 @@ namespace MMI_SP
                     {
                         incoming.driver.Task.LeaveVehicle();
                         Function.Call(Hash.RESET_PED_LAST_VEHICLE, incoming.driver);
+                        (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
                         break;
                     }
                 }
@@ -397,6 +404,7 @@ namespace MMI_SP
                     {
                         incoming.driver.Task.LeaveVehicle();
                         Function.Call(Hash.RESET_PED_LAST_VEHICLE, incoming.driver);
+                        (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
                         break;
                     }
                 }
@@ -405,6 +413,7 @@ namespace MMI_SP
                 {
                     incoming.driver.Task.LeaveVehicle();
                     Function.Call(Hash.RESET_PED_LAST_VEHICLE, incoming.driver);
+                    (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
                     break;
                 }
 
@@ -414,7 +423,7 @@ namespace MMI_SP
                     incoming.driver.IsPersistent = false;
                     incoming.driver.MarkAsNoLongerNeeded();
                     incoming.driver.Task.WanderAround();
-                    IncomingVehicles.Remove(incoming);
+                    (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
 
                     // Only say Bye if the player is close
                     if (incoming.driver.Position.DistanceTo(Game.Player.Character.Position) < 8.0f)
@@ -434,9 +443,15 @@ namespace MMI_SP
                 if (Game.GameTime - incoming.calledTime > (Config.BringVehicleTimeout * 60000))
                 {
                     CannotBringVehicle(incoming);
+                    (toRemove ??= new List<IncomingVehicle>()).Add(incoming);
                     break;
                 }
 
+            }
+
+            if (toRemove != null)
+            {
+                foreach (var v in toRemove) IncomingVehicles.Remove(v);
             }
         }
         /// <summary>
@@ -497,7 +512,7 @@ namespace MMI_SP
                 }
                 else
                 {
-                    if (veh.Model.IsCargobob || veh.Model.IsHelicopter)
+                    if (veh.Model.IsHelicopter)
                         IncomingVehicles.Add(IncomingVehicle.BringHelicopter(veh, cost, recoveredVehicle));
                     else if (veh.Model.IsPlane)
                         IncomingVehicles.Add(IncomingVehicle.BringPlane(veh, cost, recoveredVehicle));

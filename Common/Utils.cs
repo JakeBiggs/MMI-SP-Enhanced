@@ -105,7 +105,7 @@ namespace MMI_SP.Common
         /// <returns></returns>
         internal static string GetVehicleIdentifier(Vehicle veh)
         {
-            string vehIdentifier = SE.Player.GetCurrentCharacterName() + veh.Model.Hash.ToString() + veh.NumberPlate;
+            string vehIdentifier = SE.Player.GetCurrentCharacterName(false) + veh.Model.Hash.ToString() + veh.NumberPlate;
             vehIdentifier = vehIdentifier.Replace(" ", "_");
             return vehIdentifier;
         }
