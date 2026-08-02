@@ -103,10 +103,17 @@ namespace MMI_SP
         private readonly static string _dbFilePath = AppDomain.CurrentDomain.BaseDirectory + "\\MMI\\db.xml";
         private XElement _dbFile; // Avoid loading the file for every request
 
-        // Lock to serialize db.xml reads/writes. SHVDN runs scripts on a shared
-        // threadpool task scheduler; without this lock, multiple scripts can call
-        // SaveDBFile in quick succession and XElement.Save throws WinIOError on
-        // the second writer.
+        // Lock to serialise both the in-memory _dbFile mutation AND the disk
+        // write. SHVDN-Enhanced (Chiheb-Bacha fork) runs scripts on a shared
+        // ThreadPool task scheduler; without holding the lock across both the
+        // mutation AND the save, two scripts can collide on _dbFile.Save()
+        // (WinIOError) AND on the in-memory XElement tree (lost-update:
+        // script B's mutation gets overwritten by script A's subsequent Save).
+        //
+        // All mutators on this class route through ModifyDB() which owns
+        // _dbLock across the user's mutation AND the atomic SaveDBFileLocked()
+        // disk write. SaveDBFileLocked() does NOT take the lock itself
+        // (Monitor is reentrant, but we keep it explicit for clarity).
         private static readonly object _dbLock = new object();
 
         /// <summary>
@@ -168,56 +175,136 @@ namespace MMI_SP
             doc.Save(file.FullName);
         }
         /// <summary>
-        /// Saves the current database to a file. Serialized via _dbLock so
-        /// concurrent scripts (Agency + iFruit) cannot collide on the write.
+        /// All database mutation goes through ModifyDB(). It owns _dbLock
+        /// across the user's mutation AND the atomic SaveDBFileLocked()
+        /// disk write, so two scripts running on the SHVDN-Enhanced
+        /// ThreadPool cannot collide on either the in-memory XElement tree
+        /// (lost-update) or the db.xml file (WinIOError).
+        ///
+        /// Pattern:
+        ///   ModifyDB(db => {
+        ///       db.Element("Vehicles").Element(id).Remove();
+        ///   });
+        /// </summary>
+        private void ModifyDB(Action<XElement> mutation)
+        {
+            int threadId = System.Threading.Thread.CurrentThread.ManagedThreadId;
+            Logger.Debug($"ModifyDB enter (thread {threadId})");
+
+            lock (_dbLock)
+            {
+                if (_dbFile == null)
+                {
+                    Logger.Info("Error: ModifyDB - _dbFile is null, skipping save.");
+                    return;
+                }
+
+                try
+                {
+                    mutation(_dbFile);
+                    SaveDBFileLocked();
+                }
+                catch (Exception ex)
+                {
+                    Logger.Info("Error: ModifyDB - mutation threw, db may be inconsistent: " + ex.Message);
+                    Logger.Exception(ex);
+                    throw;
+                }
+            }
+
+            Logger.Debug($"ModifyDB exit (thread {threadId})");
+        }
+
+        /// <summary>
+        /// Saves the in-memory _dbFile to db.xml atomically. Caller MUST
+        /// hold _dbLock. (Monitor is reentrant so this is safe to call from
+        /// inside the lock.)
+        ///
+        /// Atomicity: writes to db.xml.tmp first, then uses File.Replace
+        /// to swap. If a crash happens mid-write, the original db.xml is
+        /// untouched (the rename is atomic on the same NTFS volume).
+        /// </summary>
+        private void SaveDBFileLocked()
+        {
+            string tempPath = _dbFilePath + ".tmp";
+            try
+            {
+                _dbFile.Save(tempPath);
+
+                if (!File.Exists(_dbFilePath))
+                {
+                    // First-ever save: just rename the .tmp into place.
+                    File.Move(tempPath, _dbFilePath);
+                }
+                else
+                {
+                    File.Replace(tempPath, _dbFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info("Error: SaveDBFileLocked - " + ex.Message);
+                Logger.Exception(ex);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// External entry point for callers that just want to flush the
+        /// current in-memory state to disk. Holds _dbLock for the duration.
         /// </summary>
         private void SaveDBFile()
         {
+            Logger.Debug($"SaveDBFile enter (thread {System.Threading.Thread.CurrentThread.ManagedThreadId})");
             lock (_dbLock)
             {
-                if (!File.Exists(_dbFilePath))
-                    CreateDBFile();
-                _dbFile.Save(_dbFilePath);
+                SaveDBFileLocked();
             }
+            Logger.Debug("SaveDBFile exit");
         }
 
 
         /// <summary>
-        /// Add a vehicle to the database
+        /// Add a vehicle to the database. Mutation+save runs inside _dbLock
+        /// via ModifyDB().
         /// </summary>
-        /// <param name="veh"></param>
         private void AddVehicleToDB(Vehicle veh)
         {
-            XElement section;
-            if (_dbFile.Element("Vehicles") == null)
+            ModifyDB(db =>
             {
-                section = new XElement("Vehicles");
-                _dbFile.Add(section);
-            }
-            else
-                section = _dbFile.Element("Vehicles");
-
-            section.Add(GenerateVehicleSection(veh));
-            SaveDBFile();
+                XElement section = db.Element("Vehicles");
+                if (section == null)
+                {
+                    section = new XElement("Vehicles");
+                    db.Add(section);
+                }
+                section.Add(GenerateVehicleSection(veh));
+            });
 
             Insured(this, veh);
         }
 
         /// <summary>
-        /// Removes a vehicle from the database.
+        /// Removes a vehicle from the database. Mutation+save runs inside
+        /// _dbLock via ModifyDB().
         /// </summary>
-        /// <param name="vehIdentifier"></param>
         private void RemoveVehicleFromDB(string vehIdentifier)
         {
-            if (_dbFile.Element("Vehicles") != null)
-                if (_dbFile.Element("Vehicles").Element(vehIdentifier) != null)
-                    _dbFile.Element("Vehicles").Element(vehIdentifier).Remove();
-                else
+            ModifyDB(db =>
+            {
+                XElement section = db.Element("Vehicles");
+                if (section == null)
+                {
+                    Logger.Info("Error: RemoveVehicleFromDB - Cannot find the section Vehicles");
+                    return;
+                }
+                if (section.Element(vehIdentifier) == null)
+                {
                     Logger.Info("Error: RemoveVehicleFromDB - Cannot find the section " + vehIdentifier);
-            else
-                Logger.Info("Error: RemoveVehicleFromDB - Cannot find the section Vehicles");
-
-            SaveDBFile();
+                    return;
+                }
+                section.Element(vehIdentifier).Remove();
+            });
 
             Raise_VehicleNoLongerInsured(this, vehIdentifier);
         }
@@ -228,57 +315,59 @@ namespace MMI_SP
 
         internal string ChangeVehicleLicensePlate(string vehIdentifier, string newPlate)
         {
-            if (_dbFile.Element("Vehicles") != null)
+            string result = "";
+            ModifyDB(db =>
             {
-                XElement vehicleSection = _dbFile.Element("Vehicles").Element(vehIdentifier);
-                if (vehicleSection != null)
+                XElement vehiclesSection = db.Element("Vehicles");
+                if (vehiclesSection == null) return;
+
+                XElement vehicleSection = vehiclesSection.Element(vehIdentifier);
+                if (vehicleSection == null)
                 {
-                    vehicleSection = vehicleSection.Element("Plate");
-                    if (vehicleSection != null)
-                    {
-                        if (vehicleSection.Element("NumberPlate") != null)
-                        {
-                            vehicleSection = _dbFile.Element("Vehicles").Element(vehIdentifier);
-                            vehicleSection = vehicleSection.Element("General");
-                            if (vehicleSection != null)
-                            {
-                                // Removes the license plate number. ie: keep only Franklin-12343456545
-                                string modelHash = vehicleSection.Element("Model").Value;
-                                if (vehIdentifier.IndexOf(modelHash) > 0)
-                                {
-                                    string newVehID = vehIdentifier.Remove(vehIdentifier.IndexOf(modelHash) + modelHash.Length);
-                                    newVehID += newPlate.Replace(" ", "_");
-
-                                    XElement newSection = new XElement(newVehID);
-                                    vehicleSection = _dbFile.Element("Vehicles").Element(vehIdentifier);
-                                    newSection.Add(vehicleSection.Elements());
-
-                                    newSection.Element("Plate").Element("NumberPlate").SetValue(newPlate);
-
-                                    vehicleSection.Remove();
-                                    _dbFile.Element("Vehicles").Add(newSection);
-
-                                    SaveDBFile();
-
-                                    return newVehID;
-                                }
-                                else
-                                    Logger.Info("Error: ChangeVehicleLicensePlate - Unable to find the modelHash for the vehicle " + vehIdentifier + ".");
-                            }
-                            else
-                                Logger.Info("Error: ChangeVehicleLicensePlate - General section is missing for the vehicle " + vehIdentifier + ".");
-                        }
-                        else
-                            Logger.Info("Error: ChangeVehicleLicensePlate - NumberPlate section is missing for the vehicle " + vehIdentifier + ".");
-                    }
-                    else
-                        Logger.Info("Error: ChangeVehicleLicensePlate - Plate section is missing for the vehicle " + vehIdentifier + ".");
-                }
-                else
                     Logger.Info("Error: ChangeVehicleLicensePlate - The vehicle identifier cannot be found: " + vehIdentifier);
-            }
+                    return;
+                }
 
-            return "";
+                XElement plateSection = vehicleSection.Element("Plate");
+                if (plateSection == null)
+                {
+                    Logger.Info("Error: ChangeVehicleLicensePlate - Plate section is missing for the vehicle " + vehIdentifier + ".");
+                    return;
+                }
+                if (plateSection.Element("NumberPlate") == null)
+                {
+                    Logger.Info("Error: ChangeVehicleLicensePlate - NumberPlate section is missing for the vehicle " + vehIdentifier + ".");
+                    return;
+                }
+
+                XElement generalSection = vehicleSection.Element("General");
+                if (generalSection == null)
+                {
+                    Logger.Info("Error: ChangeVehicleLicensePlate - General section is missing for the vehicle " + vehIdentifier + ".");
+                    return;
+                }
+
+                string modelHash = generalSection.Element("Model").Value;
+                int modelIdx = vehIdentifier.IndexOf(modelHash);
+                if (modelIdx <= 0)
+                {
+                    Logger.Info("Error: ChangeVehicleLicensePlate - Unable to find the modelHash for the vehicle " + vehIdentifier + ".");
+                    return;
+                }
+
+                string newVehID = vehIdentifier.Remove(modelIdx + modelHash.Length) + newPlate.Replace(" ", "_");
+
+                XElement newSection = new XElement(newVehID);
+                newSection.Add(vehiclesSection.Element(vehIdentifier).Elements());
+
+                newSection.Element("Plate").Element("NumberPlate").SetValue(newPlate);
+
+                vehiclesSection.Element(vehIdentifier).Remove();
+                vehiclesSection.Add(newSection);
+
+                result = newVehID;
+            });
+            return result;
         }
 
         /// <summary>
@@ -548,14 +637,19 @@ namespace MMI_SP
         /// <param name="status"></param>
         internal void SetVehicleStatusToDB(string vehIdentifier, string status)
         {
-            if (_dbFile.Element("Vehicles") != null)
-                if (_dbFile.Element("Vehicles").Element(vehIdentifier) != null)
-                    if (_dbFile.Element("Vehicles").Element(vehIdentifier).Element("General") != null)
-                    {
-                        XElement vehSection = _dbFile.Element("Vehicles").Element(vehIdentifier).Element("General");
-                        vehSection.Element("Status").SetValue(status);
-                        SaveDBFile();
-                    }
+            ModifyDB(db =>
+            {
+                XElement vehiclesSection = db.Element("Vehicles");
+                if (vehiclesSection == null) return;
+
+                XElement vehicleSection = vehiclesSection.Element(vehIdentifier);
+                if (vehicleSection == null) return;
+
+                XElement generalSection = vehicleSection.Element("General");
+                if (generalSection == null) return;
+
+                generalSection.Element("Status").SetValue(status);
+            });
         }
 
 
@@ -865,198 +959,204 @@ namespace MMI_SP
         {
             string vehIdentifier = Utils.GetVehicleIdentifier(veh);
 
-            if (_dbFile.Element("Vehicles") != null)
+            ModifyDB(db =>
             {
-                XElement vehSection = _dbFile.Element("Vehicles").Element(vehIdentifier);
-                if (vehSection != null)
+                XElement vehiclesSection = db.Element("Vehicles");
+                if (vehiclesSection == null)
                 {
-                    XElement currentSection;
+                    Logger.Info("Error: UpdateVehicleToDB - The \"vehicles\" section doesn't exist in the DB file!");
+                    return;
+                }
 
-                    // General
-                    currentSection = vehSection.Element("General");
-                    if (currentSection != null)
-                        currentSection.Element("Cost").SetValue(GetVehicleInsuranceCost(veh).ToString());
+                XElement vehSection = vehiclesSection.Element(vehIdentifier);
+                if (vehSection == null)
+                {
+                    Logger.Info("Error: UpdateVehicleToDB - Unable to find the current vehicle section in DB: " + vehIdentifier);
+                    return;
+                }
 
-                    // Plate
-                    currentSection = vehSection.Element("Plate");
-                    if (currentSection != null)
-                        if (currentSection.Element("NumberPlateType") != null)
-                            currentSection.Element("NumberPlateType").SetValue((int)veh.NumberPlateType);
-                        else
-                            Logger.Info("Error: UpdateVehicleToDB - NumberPlateType not found.");
+                XElement currentSection;
 
-                    // Wheels
-                    currentSection = vehSection.Element("Wheels");
-                    if (currentSection != null)
-                        if (currentSection.Element("WheelType") != null)
-                            currentSection.Element("WheelType").SetValue(veh.WheelType);
-                        else
-                            Logger.Info("Error: UpdateVehicleToDB - WheelType not found.");
+                // General
+                currentSection = vehSection.Element("General");
+                if (currentSection != null)
+                    currentSection.Element("Cost").SetValue(GetVehicleInsuranceCost(veh).ToString());
 
-                    // Mods
-                    currentSection = vehSection.Element("Mods");
-                    if (currentSection != null)
+                // Plate
+                currentSection = vehSection.Element("Plate");
+                if (currentSection != null)
+                {
+                    if (currentSection.Element("NumberPlateType") != null)
+                        currentSection.Element("NumberPlateType").SetValue((int)veh.NumberPlateType);
+                    else
+                        Logger.Info("Error: UpdateVehicleToDB - NumberPlateType not found.");
+                }
+
+                // Wheels
+                currentSection = vehSection.Element("Wheels");
+                if (currentSection != null)
+                {
+                    if (currentSection.Element("WheelType") != null)
+                        currentSection.Element("WheelType").SetValue(veh.WheelType);
+                    else
+                        Logger.Info("Error: UpdateVehicleToDB - WheelType not found.");
+                }
+
+                // Mods
+                currentSection = vehSection.Element("Mods");
+                if (currentSection != null)
+                {
+                    currentSection.RemoveAll();
+
+                    foreach (VehicleMod mod in Enum.GetValues(typeof(VehicleMod)))
                     {
-                        currentSection.RemoveAll();
-
-                        foreach (VehicleMod mod in Enum.GetValues(typeof(VehicleMod)))
-                        {
-                            XElement modElem = new XElement("Mod", new XAttribute("Name", mod));
-                            modElem.SetValue(veh.GetMod(mod));
-
-                            currentSection.Add(modElem);
-                        }
-                        foreach (VehicleToggleMod mod in Enum.GetValues(typeof(VehicleToggleMod)))
-                        {
-                            XElement modElem = new XElement("ToggleMod", new XAttribute("Name", mod));
-                            if (veh.IsToggleModOn(mod))
-                                modElem.SetValue(true);
-                            else
-                                modElem.SetValue(false);
-
-                            currentSection.Add(modElem);
-                        }
-                        currentSection.Add(new XElement("FrontTiresCustom", Function.Call<bool>(Hash.GET_VEHICLE_MOD_VARIATION, veh, 23)));
-                        currentSection.Add(new XElement("RearTiresCustom", Function.Call<bool>(Hash.GET_VEHICLE_MOD_VARIATION, veh, 24)));
-                        currentSection.Add(new XElement("WindowTint", (int)veh.WindowTint));
+                        XElement modElem = new XElement("Mod", new XAttribute("Name", mod));
+                        modElem.SetValue(veh.GetMod(mod));
+                        currentSection.Add(modElem);
                     }
-
-                    // Tires
-                    currentSection = vehSection.Element("Tires");
-                    if (currentSection != null)
+                    foreach (VehicleToggleMod mod in Enum.GetValues(typeof(VehicleToggleMod)))
                     {
-                        if (currentSection.Element("TireSmokeColor") != null)
-                        {
-                            try
-                            {
-                                currentSection.Element("TireSmokeColor").SetValue(ColorTranslator.ToHtml(veh.TireSmokeColor));
-                            }
-                            catch (Exception e)
-                            {
-                                currentSection.Element("TireSmokeColor").SetValue(ColorTranslator.ToHtml(Color.White));
-                                Logger.Info("Warning: GenerateVehicleSection - TireSmokeColor is wrong: " + e.Message);
-                            }
-                        }
+                        XElement modElem = new XElement("ToggleMod", new XAttribute("Name", mod));
+                        if (veh.IsToggleModOn(mod))
+                            modElem.SetValue(true);
                         else
-                            Logger.Info("Error: UpdateVehicleToDB - TireSmokeColor not found.");
-
-                        if (currentSection.Element("CanTiresBurst") != null)
-                            currentSection.Element("CanTiresBurst").SetValue(veh.CanTiresBurst);
-                        else
-                            Logger.Info("Error: UpdateVehicleToDB - CanTiresBurst not found.");
+                            modElem.SetValue(false);
+                        currentSection.Add(modElem);
                     }
+                    currentSection.Add(new XElement("FrontTiresCustom", Function.Call<bool>(Hash.GET_VEHICLE_MOD_VARIATION, veh, 23)));
+                    currentSection.Add(new XElement("RearTiresCustom", Function.Call<bool>(Hash.GET_VEHICLE_MOD_VARIATION, veh, 24)));
+                    currentSection.Add(new XElement("WindowTint", (int)veh.WindowTint));
+                }
 
-                    // Neons
-                    currentSection = vehSection.Element("Neons");
-                    if (currentSection != null)
+                // Tires
+                currentSection = vehSection.Element("Tires");
+                if (currentSection != null)
+                {
+                    if (currentSection.Element("TireSmokeColor") != null)
                     {
-                        currentSection.RemoveAll();
                         try
                         {
-                            currentSection.Add(new XElement("NeonLightsColor", ColorTranslator.ToHtml(veh.NeonLightsColor)));
+                            currentSection.Element("TireSmokeColor").SetValue(ColorTranslator.ToHtml(veh.TireSmokeColor));
                         }
                         catch (Exception e)
                         {
-                            currentSection.Add(new XElement("NeonLightsColor", ColorTranslator.ToHtml(Color.White)));
-                            Logger.Info("Warning: GenerateVehicleSection - NeonLightsColor is wrong: " + e.Message);
+                            currentSection.Element("TireSmokeColor").SetValue(ColorTranslator.ToHtml(Color.White));
+                            Logger.Info("Warning: GenerateVehicleSection - TireSmokeColor is wrong: " + e.Message);
                         }
-                        
-                        for (int i = 0; i < 4; i++)
-                            if (veh.IsNeonLightsOn((VehicleNeonLight)i))
-                                currentSection.Add(new XElement("VehicleNeonLight", i));
                     }
+                    else
+                        Logger.Info("Error: UpdateVehicleToDB - TireSmokeColor not found.");
 
-                    // Colors
-                    currentSection = vehSection.Element("Colors");
-                    if (currentSection != null)
-                    {
-                        if (currentSection.Element("IsPrimaryColorCustom") != null) currentSection.Element("IsPrimaryColorCustom").SetValue(veh.IsPrimaryColorCustom);
-                        else Logger.Info("Error: UpdateVehicleToDB - IsPrimaryColorCustom not found.");
-
-                        if (currentSection.Element("IsSecondaryColorCustom") != null) currentSection.Element("IsSecondaryColorCustom").SetValue(veh.IsSecondaryColorCustom);
-                        else Logger.Info("Error: UpdateVehicleToDB - IsSecondaryColorCustom not found.");
-
-                        if (currentSection.Element("PrimaryColor") != null) currentSection.Element("PrimaryColor").SetValue(veh.PrimaryColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - PrimaryColor not found.");
-
-                        if (currentSection.Element("SecondaryColor") != null) currentSection.Element("SecondaryColor").SetValue(veh.SecondaryColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - SecondaryColor not found.");
-
-                        if (currentSection.Element("PearlescentColor") != null) currentSection.Element("PearlescentColor").SetValue(veh.PearlescentColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - PearlescentColor not found.");
-
-                        if (currentSection.Element("RimColor") != null) currentSection.Element("RimColor").SetValue(veh.RimColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - RimColor not found.");
-
-                        if (currentSection.Element("ColorCombination") != null) currentSection.Element("ColorCombination").SetValue(veh.ColorCombination);
-                        else Logger.Info("Error: UpdateVehicleToDB - ColorCombination not found.");
-
-                        if (currentSection.Element("CustomPrimaryColor") != null) currentSection.Element("CustomPrimaryColor").SetValue(ColorTranslator.ToHtml(veh.CustomPrimaryColor));
-                        else Logger.Info("Error: UpdateVehicleToDB - CustomPrimaryColor not found.");
-
-                        if (currentSection.Element("CustomSecondaryColor") != null) currentSection.Element("CustomSecondaryColor").SetValue(ColorTranslator.ToHtml(veh.CustomSecondaryColor));
-                        else Logger.Info("Error: UpdateVehicleToDB - CustomSecondaryColor not found.");
-
-                        if (currentSection.Element("DashboardColor") != null) currentSection.Element("DashboardColor").SetValue(veh.DashboardColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - DashboardColor not found.");
-
-                        if (currentSection.Element("TrimColor") != null) currentSection.Element("TrimColor").SetValue(veh.TrimColor);
-                        else Logger.Info("Error: UpdateVehicleToDB - TrimColor not found.");
-
-                    }
-
-                    // Convertible
-                    if (veh.IsConvertible)
-                    {
-                        currentSection = vehSection.Element("Convertible");
-
-                        if (currentSection != null)
-                            if (currentSection.Element("ConvertibleRoofState") != null)
-                                currentSection.Element("ConvertibleRoofState").SetValue(veh.RoofState);
-                            else
-                                Logger.Info("Error: UpdateVehicleToDB - NeonLightsColor not found.");
-                    }
-
-                    // Extra
-                    currentSection = vehSection.Element("Extra");
-                    if (currentSection != null)
-                    {
-                        currentSection.RemoveAll();
-                        for (int i = 1; i < 15; i++)
-                            if (veh.IsExtraOn(i))
-                                currentSection.Add(new XElement("ID", i));
-                    }
-
-                    // Livery
-                    currentSection = vehSection.Element("Livery");
-                    if (currentSection != null)
-                        if (currentSection.Element("ID") != null)
-                            currentSection.Element("ID").SetValue(veh.Livery);
-                        else
-                            Logger.Info("Error: UpdateVehicleToDB - Livery ID not found.");
-
-                    if (SE.Vehicle.GetVehicleLivery2(veh) > 0)
-                    {
-                        currentSection = vehSection.Element("Livery2");
-                        if (currentSection != null)
-                            if (currentSection.Element("ID") != null)
-                                currentSection.Element("ID").SetValue(SE.Vehicle.GetVehicleLivery2(veh));
-                            else
-                                Logger.Info("Error: UpdateVehicleToDB - Livery2 ID not found.");
-                    }
-
-                    // Saving file
-                    SaveDBFile();
+                    if (currentSection.Element("CanTiresBurst") != null)
+                        currentSection.Element("CanTiresBurst").SetValue(veh.CanTiresBurst);
+                    else
+                        Logger.Info("Error: UpdateVehicleToDB - CanTiresBurst not found.");
                 }
-                else
+
+                // Neons
+                currentSection = vehSection.Element("Neons");
+                if (currentSection != null)
                 {
-                    Logger.Info("Error: UpdateVehicleToDB - Unable to find the current vehicle section in DB: " + vehIdentifier);
+                    currentSection.RemoveAll();
+                    try
+                    {
+                        currentSection.Add(new XElement("NeonLightsColor", ColorTranslator.ToHtml(veh.NeonLightsColor)));
+                    }
+                    catch (Exception e)
+                    {
+                        currentSection.Add(new XElement("NeonLightsColor", ColorTranslator.ToHtml(Color.White)));
+                        Logger.Info("Warning: GenerateVehicleSection - NeonLightsColor is wrong: " + e.Message);
+                    }
+
+                    for (int i = 0; i < 4; i++)
+                        if (veh.IsNeonLightsOn((VehicleNeonLight)i))
+                            currentSection.Add(new XElement("VehicleNeonLight", i));
                 }
-            }
-            else
-            {
-                Logger.Info("Error: UpdateVehicleToDB - The \"vehicles\" section doesn't exist in the DB file!");
-            }
+
+                // Colors
+                currentSection = vehSection.Element("Colors");
+                if (currentSection != null)
+                {
+                    if (currentSection.Element("IsPrimaryColorCustom") != null) currentSection.Element("IsPrimaryColorCustom").SetValue(veh.IsPrimaryColorCustom);
+                    else Logger.Info("Error: UpdateVehicleToDB - IsPrimaryColorCustom not found.");
+
+                    if (currentSection.Element("IsSecondaryColorCustom") != null) currentSection.Element("IsSecondaryColorCustom").SetValue(veh.IsSecondaryColorCustom);
+                    else Logger.Info("Error: UpdateVehicleToDB - IsSecondaryColorCustom not found.");
+
+                    if (currentSection.Element("PrimaryColor") != null) currentSection.Element("PrimaryColor").SetValue(veh.PrimaryColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - PrimaryColor not found.");
+
+                    if (currentSection.Element("SecondaryColor") != null) currentSection.Element("SecondaryColor").SetValue(veh.SecondaryColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - SecondaryColor not found.");
+
+                    if (currentSection.Element("PearlescentColor") != null) currentSection.Element("PearlescentColor").SetValue(veh.PearlescentColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - PearlescentColor not found.");
+
+                    if (currentSection.Element("RimColor") != null) currentSection.Element("RimColor").SetValue(veh.RimColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - RimColor not found.");
+
+                    if (currentSection.Element("ColorCombination") != null) currentSection.Element("ColorCombination").SetValue(veh.ColorCombination);
+                    else Logger.Info("Error: UpdateVehicleToDB - ColorCombination not found.");
+
+                    if (currentSection.Element("CustomPrimaryColor") != null) currentSection.Element("CustomPrimaryColor").SetValue(ColorTranslator.ToHtml(veh.CustomPrimaryColor));
+                    else Logger.Info("Error: UpdateVehicleToDB - CustomPrimaryColor not found.");
+
+                    if (currentSection.Element("CustomSecondaryColor") != null) currentSection.Element("CustomSecondaryColor").SetValue(ColorTranslator.ToHtml(veh.CustomSecondaryColor));
+                    else Logger.Info("Error: UpdateVehicleToDB - CustomSecondaryColor not found.");
+
+                    if (currentSection.Element("DashboardColor") != null) currentSection.Element("DashboardColor").SetValue(veh.DashboardColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - DashboardColor not found.");
+
+                    if (currentSection.Element("TrimColor") != null) currentSection.Element("TrimColor").SetValue(veh.TrimColor);
+                    else Logger.Info("Error: UpdateVehicleToDB - TrimColor not found.");
+                }
+
+                // Convertible
+                if (veh.IsConvertible)
+                {
+                    currentSection = vehSection.Element("Convertible");
+                    if (currentSection != null)
+                    {
+                        if (currentSection.Element("ConvertibleRoofState") != null)
+                            currentSection.Element("ConvertibleRoofState").SetValue(veh.RoofState);
+                        else
+                            Logger.Info("Error: UpdateVehicleToDB - NeonLightsColor not found.");
+                    }
+                }
+
+                // Extra
+                currentSection = vehSection.Element("Extra");
+                if (currentSection != null)
+                {
+                    currentSection.RemoveAll();
+                    for (int i = 1; i < 15; i++)
+                        if (veh.IsExtraOn(i))
+                            currentSection.Add(new XElement("ID", i));
+                }
+
+                // Livery
+                currentSection = vehSection.Element("Livery");
+                if (currentSection != null)
+                {
+                    if (currentSection.Element("ID") != null)
+                        currentSection.Element("ID").SetValue(veh.Livery);
+                    else
+                        Logger.Info("Error: UpdateVehicleToDB - Livery ID not found.");
+                }
+
+                if (SE.Vehicle.GetVehicleLivery2(veh) > 0)
+                {
+                    currentSection = vehSection.Element("Livery2");
+                    if (currentSection != null)
+                    {
+                        if (currentSection.Element("ID") != null)
+                            currentSection.Element("ID").SetValue(SE.Vehicle.GetVehicleLivery2(veh));
+                        else
+                            Logger.Info("Error: UpdateVehicleToDB - Livery2 ID not found.");
+                    }
+                }
+                // Save is performed by ModifyDB after this delegate returns.
+            });
         }
 
         /// <summary>
