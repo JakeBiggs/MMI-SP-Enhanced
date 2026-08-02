@@ -54,24 +54,6 @@ namespace MMI_SP
             Config.Initialize();
             Logger.Debug("Configuration values loaded");
 
-
-            Logger.Debug("Checking prerequisites...");
-            if (SelfCheck.Check())
-            {
-                Logger.Debug("Prerequisites are installed");
-
-                Logger.Debug("Checking for updates...");
-                if (Config.CheckForUpdate)
-                {
-                    // Async check for updates
-                    Updater.CheckForUpdate();
-                }
-            }
-            else
-            {
-                Logger.Debug("Prerequisites are not installed");
-            }
-
             _initialized = true;
 
             Tick -= Initialize;
