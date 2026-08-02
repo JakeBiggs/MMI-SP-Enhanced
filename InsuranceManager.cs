@@ -147,7 +147,18 @@ namespace MMI_SP
                 CreateDBFile();
             try
             {
-                _dbFile = XElement.Load(_dbFilePath);
+                // Open db.xml with FileShare.ReadWrite so AMSI / Defender
+                // scan handles (which they keep open across calls) don't
+                // cause our next write to fail with ERROR_SHARING_VIOLATION.
+                // The FileStream is disposed at end of using-scope, so it
+                // does not linger on the .NET heap as an undisposed handle.
+                using (FileStream fs = new FileStream(_dbFilePath,
+                                                      FileMode.Open,
+                                                      FileAccess.Read,
+                                                      FileShare.ReadWrite))
+                {
+                    _dbFile = XElement.Load(fs);
+                }
             }
             catch (Exception e)
             {
@@ -161,7 +172,7 @@ namespace MMI_SP
         private static void CreateDBFile()
         {
             FileInfo file = new FileInfo(_dbFilePath);
-            
+
             if (!file.Directory.Exists)
                 Directory.CreateDirectory(file.Directory.FullName);
 
@@ -172,7 +183,18 @@ namespace MMI_SP
                 );
             XElement main = new XElement("MMI");
             doc.Add(main);
-            doc.Save(file.FullName);
+
+            // FileShare.ReadWrite | FileShare.Delete -- see SaveDBFileLocked
+            // for the rationale. We're not atomic-replacing here either; this
+            // is a one-shot bootstrap write.
+            using (FileStream fs = new FileStream(file.FullName,
+                                                  FileMode.Create,
+                                                  FileAccess.Write,
+                                                  FileShare.ReadWrite | FileShare.Delete))
+            {
+                doc.Save(fs);
+                fs.Flush(true);
+            }
         }
         /// <summary>
         /// All database mutation goes through ModifyDB(). It owns _dbLock
@@ -216,61 +238,46 @@ namespace MMI_SP
         }
 
         /// <summary>
-        /// Saves the in-memory _dbFile to db.xml atomically. Caller MUST
-        /// hold _dbLock. (Monitor is reentrant so this is safe to call from
-        /// inside the lock.)
+        /// Saves the in-memory _dbFile to db.xml. Caller MUST hold _dbLock.
+        /// (Monitor is reentrant so this is safe to call from inside the lock.)
         ///
-        /// Strategy: write new content to db.xml.tmp, then use File.Replace
-        /// to swap. If a crash happens mid-write, the original db.xml is
-        /// untouched (the rename is atomic on the same NTFS volume).
+        /// Strategy: open db.xml with FileShare.ReadWrite | FileShare.Delete
+        /// and stream the XML in via an XmlWriter. No File.Replace, no
+        /// .tmp staging file -- the whole point is to coexist with other
+        /// handles that Defender / AMSI / GTA5's own thread scheduler may
+        /// have open on db.xml.
         ///
-        /// IMPORTANT: Windows Defender (and other AV) can hold the file open
-        /// for scanning on every write. File.Replace needs exclusive access
-        /// to the destination for the rename step -- if Defender has a handle
-        /// open, File.Replace fails with ERROR_SHARING_VIOLATION ("used by
-        /// another process"). When that happens, fall back to direct write
-        /// (overwrite) -- not crash-safe but unblocks the mod. The
-        /// scripts/MMI folder is excluded from Defender on the Legion Go
-        /// target install; this fallback is for cases where the exclusion
-        /// isn't applied.
+        /// Trade-off vs the old atomic-replace approach: this is NOT
+        /// crash-safe. If the game process is killed mid-write, db.xml can
+        /// be left partially written. On next launch, _dbFile = XElement.Load
+        /// will fail with a parse error, the catch block logs it, and the
+        /// mod continues with an empty in-memory tree. User's previously
+        /// saved vehicles are lost in that scenario.
+        ///
+        /// We accept this because the alternative (ERROR_SHARING_VIOLATION
+        /// on every save because some other handle in the process is stuck
+        /// open on db.xml) makes the mod completely non-functional. If
+        /// crash-safety becomes a problem later, the next step is to move
+        /// db.xml to a path outside scripts/ (e.g. %LOCALAPPDATA%) where
+        /// AMSI / Defender don't scan it.
         /// </summary>
         private void SaveDBFileLocked()
         {
-            string tempPath = _dbFilePath + ".tmp";
-            try
+            // FileMode.Create truncates any existing db.xml to zero bytes
+            // before we write, so a partial prior write is overwritten.
+            // FileShare.ReadWrite | FileShare.Delete tells Windows: "I
+            // don't need exclusive access -- other readers (AMSI, Defender,
+            // our own XmlReader if anything is mid-read) are welcome to
+            // also have handles on this file". That is the whole point.
+            using (FileStream fs = new FileStream(_dbFilePath,
+                                                  FileMode.Create,
+                                                  FileAccess.Write,
+                                                  FileShare.ReadWrite | FileShare.Delete))
             {
-                _dbFile.Save(tempPath);
-
-                try
-                {
-                    if (!File.Exists(_dbFilePath))
-                    {
-                        // First-ever save: just rename the .tmp into place.
-                        File.Move(tempPath, _dbFilePath);
-                    }
-                    else
-                    {
-                        File.Replace(tempPath, _dbFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
-                    }
-                    return;
-                }
-                catch (Exception replaceEx)
-                {
-                    // Fallback: direct overwrite. NOT crash-safe (a crash
-                    // mid-write can corrupt db.xml), but unblocks the mod
-                    // when Defender or another scanner has db.xml open.
-                    Logger.Info("Info: SaveDBFileLocked - atomic replace failed (" + replaceEx.Message + "), falling back to direct write.");
-                    _dbFile.Save(_dbFilePath);
-                    // Clean up the .tmp leftover so the next atomic save
-                    // can start clean.
-                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.Info("Error: SaveDBFileLocked - " + ex.Message);
-                Logger.Exception(ex);
-                throw;
+                // XElement.Save(stream) writes via XmlWriter; the writer
+                // flushes and disposes through the FileStream's using block.
+                _dbFile.Save(fs);
+                fs.Flush(true);
             }
         }
 
