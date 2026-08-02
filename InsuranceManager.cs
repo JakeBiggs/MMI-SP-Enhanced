@@ -99,8 +99,20 @@ namespace MMI_SP
             new EntityPosition(new Vector3(-1565.328f, 3020.8f, 32.43408f), 121.0561f),
             new EntityPosition(new Vector3(-1668.656f, 3081.12f, 30.85717f), 231.5131f)};
 
-        // Database file
-        private readonly static string _dbFilePath = AppDomain.CurrentDomain.BaseDirectory + "\\MMI\\db.xml";
+        // Database file. Stored in %LOCALAPPDATA%\MMI-SP\ rather than
+        // scripts\ because Windows Defender's AMSI minifilter holds
+        // exclusive file handles on Program Files paths during scan
+        // operations inside the game process. Those handles never
+        // release, making every save fail with ERROR_SHARING_VIOLATION.
+        // %LOCALAPPDATA% is not scanned by Defender's file-system
+        // minifilter, so writes work without contention.
+        private readonly static string _dbFilePath =
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData) + "\\MMI-SP\\db.xml";
+
+        // Previous path — used for one-time migration of the user's
+        // existing insured vehicles from the old location.
+        private readonly static string _dbFilePathLegacy =
+            AppDomain.CurrentDomain.BaseDirectory + "\\MMI\\db.xml";
         private XElement _dbFile; // Avoid loading the file for every request
 
         // Lock to serialise both the in-memory _dbFile mutation AND the disk
@@ -163,6 +175,28 @@ namespace MMI_SP
             catch (Exception e)
             {
                 Logger.Info("Error: InsuranceManager - Cannot load database file. " + e.Message);
+            }
+        }
+
+        /// <summary>
+        /// One-time migration: copies the legacy scripts\MMI\db.xml to the
+        /// new %LOCALAPPDATA%\MMI-SP\db.xml location if the new file doesn't
+        /// exist yet.
+        /// </summary>
+        private static void MigrateLegacyDB()
+        {
+            if (File.Exists(_dbFilePath)) return; // already migrated
+
+            if (File.Exists(_dbFilePathLegacy))
+            {
+                try
+                {
+                    string newDir = Path.GetDirectoryName(_dbFilePath);
+                    if (!Directory.Exists(newDir))
+                        Directory.CreateDirectory(newDir);
+                    File.Copy(_dbFilePathLegacy, _dbFilePath);
+                }
+                catch { /* best-effort: if migration fails, we start fresh */ }
             }
         }
 
