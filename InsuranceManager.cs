@@ -712,17 +712,26 @@ namespace MMI_SP
         }
         public static bool IsVehicleInsured(string vehIdentifier)
         {
-            bool output = false;
+            // Use the cached _dbFile tree instead of re-reading db.xml from
+            // disk on every OnTick. Reading from disk opens a file handle
+            // with FileShare.Read -- if a SaveDBFileLocked() is in flight on
+            // another thread (UpdateVehicleToDB / AddVehicleToDB /
+            // RemoveVehicleFromDB), the in-flight write collides with the
+            // read handle and throws ERROR_SHARING_VIOLATION. That's the
+            // exception you saw on every InsuranceObserver.OnTick.
+            //
+            // _dbFile is a singleton inside InsuranceManager.Instance; the
+            // reads are not torn because XElement reads are atomic. Reads
+            // outside the lock are intentional -- the lock only guards
+            // mutation+save. A read here may see a stale snapshot during a
+            // concurrent save, but that's fine: IsVehicleInsured is a hint
+            // for HUD display, not a source of truth.
+            if (_instance == null || _instance._dbFile == null) return false;
 
-            if (File.Exists(_dbFilePath))
-            {
-                XElement xdoc = XElement.Load(_dbFilePath);
-                if (xdoc.Element("Vehicles") != null)
-                    if (xdoc.Element("Vehicles").Element(vehIdentifier) != null)
-                        output = true;
-            }
-
-            return output;
+            XElement root = _instance._dbFile;
+            XElement section = root.Element("Vehicles");
+            if (section == null) return false;
+            return section.Element(vehIdentifier) != null;
         }
 
         /// <summary>
