@@ -103,6 +103,9 @@ namespace MMI_SP.iFruit
             else if (family == SoundFamily.NoMoney)
                 list.AddRange(_noMoneyList);
 
+            if (list.Count == 0)
+                return;
+
             int index = _rnd.Next(0, list.Count - 1);
 
             try
