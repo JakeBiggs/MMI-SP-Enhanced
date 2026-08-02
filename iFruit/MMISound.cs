@@ -9,40 +9,86 @@ namespace MMI_SP.iFruit
     {
 
         private static Random _rnd = new Random();
-        public enum SoundFamily { Hello, Okay, Bye, NoMoney };
+                public enum SoundFamily { Hello, Okay, Bye, NoMoney };
 
-        private static int _volume = 25;
-        public static int Volume { get => _volume; set => _volume = value; }
+                private static int _volume = 25;
+                public static int Volume { get => _volume; set => _volume = value; }
 
-        private static List<UnmanagedMemoryStream> _helloList = new List<UnmanagedMemoryStream> {
-            Properties.Resources.Start_HelloThisIsMMI,
-            Properties.Resources.Start_MMIExpectUnexpected,
-            Properties.Resources.Start_MMIHereToHelp,
-            Properties.Resources.Start_MMIHowCanHelp,
-            Properties.Resources.Start_MMIHowCanIBeService,
-            Properties.Resources.Start_MMIPeaceOfMind,
-            Properties.Resources.Start_MMITrust,
-            Properties.Resources.Start_WhatCanIDo,
-            Properties.Resources.Start_WhatCanIHelpYouWith};
+                // On GTA V Enhanced, the CLR can fail to resolve embedded resource
+                // streams during static field initialization (the assembly load
+                // context differs from Legacy). If any resource fails, we catch it
+                // in the static constructor so the type initializes successfully
+                // with empty lists -- Play() becomes a no-op for that family rather
+                // than throwing TypeInitializationException and killing iFruitMMI.
+                private static List<UnmanagedMemoryStream> _helloList;
+                private static List<UnmanagedMemoryStream> _byeList;
+                private static List<UnmanagedMemoryStream> _okayList;
+                private static List<UnmanagedMemoryStream> _noMoneyList;
 
-        private static List<UnmanagedMemoryStream> _byeList = new List<UnmanagedMemoryStream> {
-            Properties.Resources.End_ByeNow,
-            Properties.Resources.End_DriveSafe,
-            Properties.Resources.End_NiceDay,
-            Properties.Resources.End_NiveDay2,
-            Properties.Resources.End_SoLong,
-            Properties.Resources.End_StaySafe};
-
-        private static List<UnmanagedMemoryStream> _okayList = new List<UnmanagedMemoryStream> {
-            Properties.Resources.Mid_ICanDoThat,
-            Properties.Resources.Mid_ILookIntoit,
-            Properties.Resources.Mid_IWillDoMyBest,
-            Properties.Resources.Mid_Okay,
-            Properties.Resources.Mid_Sure,
-            Properties.Resources.Mid_WeCanDoThat,
-            Properties.Resources.Mid_WeCanHandleThat};
-
-        private static List<UnmanagedMemoryStream> _noMoneyList = new List<UnmanagedMemoryStream> { Properties.Resources.NoMoney };
+                static MMISound()
+                {
+                    try
+                    {
+                        _helloList = new List<UnmanagedMemoryStream> {
+                            Properties.Resources.Start_HelloThisIsMMI,
+                            Properties.Resources.Start_MMIExpectUnexpected,
+                            Properties.Resources.Start_MMIHereToHelp,
+                            Properties.Resources.Start_MMIHowCanHelp,
+                            Properties.Resources.Start_MMIHowCanIBeService,
+                            Properties.Resources.Start_MMIPeaceOfMind,
+                            Properties.Resources.Start_MMITrust,
+                            Properties.Resources.Start_WhatCanIDo,
+                            Properties.Resources.Start_WhatCanIHelpYouWith
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        _helloList = new List<UnmanagedMemoryStream>();
+                        Logger.Info("MMISound: hello resources failed to load: " + ex.Message);
+                    }
+                    try
+                    {
+                        _byeList = new List<UnmanagedMemoryStream> {
+                            Properties.Resources.End_ByeNow,
+                            Properties.Resources.End_DriveSafe,
+                            Properties.Resources.End_NiceDay,
+                            Properties.Resources.End_NiveDay2,
+                            Properties.Resources.End_SoLong,
+                            Properties.Resources.End_StaySafe
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        _byeList = new List<UnmanagedMemoryStream>();
+                        Logger.Info("MMISound: bye resources failed to load: " + ex.Message);
+                    }
+                    try
+                    {
+                        _okayList = new List<UnmanagedMemoryStream> {
+                            Properties.Resources.Mid_ICanDoThat,
+                            Properties.Resources.Mid_ILookIntoit,
+                            Properties.Resources.Mid_IWillDoMyBest,
+                            Properties.Resources.Mid_Okay,
+                            Properties.Resources.Mid_Sure,
+                            Properties.Resources.Mid_WeCanDoThat,
+                            Properties.Resources.Mid_WeCanHandleThat
+                        };
+                    }
+                    catch (Exception ex)
+                    {
+                        _okayList = new List<UnmanagedMemoryStream>();
+                        Logger.Info("MMISound: okay resources failed to load: " + ex.Message);
+                    }
+                    try
+                    {
+                        _noMoneyList = new List<UnmanagedMemoryStream> { Properties.Resources.NoMoney };
+                    }
+                    catch (Exception ex)
+                    {
+                        _noMoneyList = new List<UnmanagedMemoryStream>();
+                        Logger.Info("MMISound: noMoney resources failed to load: " + ex.Message);
+                    }
+                }
 
 
         public static void Play(SoundFamily family)
