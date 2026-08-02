@@ -42,14 +42,6 @@ namespace MMI_SP.iFruit
             AddMenuConfigCheckbox(submenuiFruit, "iFruit", "CaniFruitStolen", Config.CaniFruitStolen, T.GetString("ConfigMenuiFruitStolen"));
             AddMenuConfigCheckbox(submenuiFruit, "iFruit", "CaniFruitPlate", Config.CaniFruitPlate, T.GetString("ConfigMenuiFruitPlate"));
             
-            UIMenu submenuNotifications = AddSubMenu(_menuPool, _mainMenu, _menuTitle, T.GetString("ConfigMenuItemNotify"), _offset);
-            AddMenuConfigCheckbox(submenuNotifications, "Check", "CheckForUpdate", Config.CheckForUpdate, T.GetString("ConfigMenuNotifyUpdate"));
-            AddMenuConfigCheckbox(submenuNotifications, "Check", "ShowSHVDNNotification", Config.ShowSHVDNNotification, T.GetString("ConfigMenuNotifySHVDN"));
-            AddMenuConfigCheckbox(submenuNotifications, "Check", "ShowFileNotification", Config.ShowFileNotification, T.GetString("ConfigMenuNotifyFile"));
-            AddMenuConfigCheckbox(submenuNotifications, "Check", "ShowVisualCNotification", Config.ShowSHVDNNotification, T.GetString("ConfigMenuNotifyVisualC"));
-            AddMenuConfigCheckbox(submenuNotifications, "Check", "ShowNETFrameworkNotification", Config.ShowSHVDNNotification, T.GetString("ConfigMenuNotifyNET"));
-            submenuNotifications.AddItem(new UIMenuItem(T.GetString("ConfigMenuNotifyReboot")) { Enabled = false } );
-
             UIMenu submenuInsurance = AddSubMenu(_menuPool, _mainMenu, _menuTitle, T.GetString("ConfigMenuItemInsurance"), _offset);
             AddMenuConfigList(submenuInsurance, "Insurance", "InsuranceCostMultiplier", Config.InsuranceMult, GetCostMultiplierDescription("InsuranceCostMultiplier"), 0f, 100f, 0.1f);
             AddMenuConfigList(submenuInsurance, "Insurance", "RecoverCostMultiplier", Config.RecoverMult, GetCostMultiplierDescription("RecoverCostMultiplier"), 0f, 100f, 0.1f);
