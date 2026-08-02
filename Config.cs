@@ -90,16 +90,8 @@ namespace MMI_SP
                 Logger.Debug("Creating config file");
                 File.WriteAllText(ConfigFile, Properties.Resources.config);
             }
-            if (!File.Exists(BannerImage))
-            {
-                Logger.Debug("Creating banner image file");
-                Properties.Resources.banner.Save(BannerImage);
-            }
-            if (!File.Exists(InsuranceImage))
-            {
-                Logger.Debug("Creating insurance image file");
-                Properties.Resources.insurance.Save(InsuranceImage);
-            }
+            // banner.png and insurance.png are shipped as loose files
+            // in scripts/MMI/ -- no embedded extraction needed.
             if (!File.Exists(LanguageFile))
             {
                 Logger.Debug("Creating default language file");

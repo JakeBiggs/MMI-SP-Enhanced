@@ -13,116 +13,99 @@ namespace MMI_SP.iFruit
         private static int _volume = 25;
         public static int Volume { get => _volume; set => _volume = value; }
 
-        // On GTA V Enhanced, the CLR can fail to resolve embedded resource
-        // streams during static field initialization (the assembly load
-        // context differs from Legacy). If any resource fails, we catch it
-        // in the static constructor so the type initializes successfully
-        // with empty lists -- Play() becomes a no-op for that family rather
-        // than throwing TypeInitializationException and killing iFruitMMI.
-        private static List<UnmanagedMemoryStream> _helloList;
-        private static List<UnmanagedMemoryStream> _byeList;
-        private static List<UnmanagedMemoryStream> _okayList;
-        private static List<UnmanagedMemoryStream> _noMoneyList;
+        // Sounds are loose .wav files under scripts/MMI/sounds/.
+        // Loading from disk avoids the System.Resources.Extensions NuGet
+        // dependency (whose .NET 8 DLLs conflict with .NET Framework 4.8
+        // and cause white squares / missing phone icons on Enhanced).
+        private static string[] _helloFiles;
+        private static string[] _byeFiles;
+        private static string[] _okayFiles;
+        private static string[] _noMoneyFiles;
+
+        private static string SoundsDir
+        {
+            get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "MMI", "sounds"); }
+        }
 
         static MMISound()
         {
             try
             {
-                _helloList = new List<UnmanagedMemoryStream> {
-                    Properties.Resources.Start_HelloThisIsMMI,
-                    Properties.Resources.Start_MMIExpectUnexpected,
-                    Properties.Resources.Start_MMIHereToHelp,
-                    Properties.Resources.Start_MMIHowCanHelp,
-                    Properties.Resources.Start_MMIHowCanIBeService,
-                    Properties.Resources.Start_MMIPeaceOfMind,
-                    Properties.Resources.Start_MMITrust,
-                    Properties.Resources.Start_WhatCanIDo,
-                    Properties.Resources.Start_WhatCanIHelpYouWith
+                string dir = SoundsDir;
+                if (!Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                _helloFiles = new[] {
+                    "Start_HelloThisIsMMI.wav",
+                    "Start_MMIExpectUnexpected.wav",
+                    "Start_MMIHereToHelp.wav",
+                    "Start_MMIHowCanHelp.wav",
+                    "Start_MMIHowCanIBeService.wav",
+                    "Start_MMIPeaceOfMind.wav",
+                    "Start_MMITrust.wav",
+                    "Start_WhatCanIDo.wav",
+                    "Start_WhatCanIHelpYouWith.wav"
                 };
-            }
-            catch (Exception ex)
-            {
-                _helloList = new List<UnmanagedMemoryStream>();
-                Logger.Info("MMISound: hello resources failed to load: " + ex.Message);
-            }
-            try
-            {
-                _byeList = new List<UnmanagedMemoryStream> {
-                    Properties.Resources.End_ByeNow,
-                    Properties.Resources.End_DriveSafe,
-                    Properties.Resources.End_NiceDay,
-                    Properties.Resources.End_NiveDay2,
-                    Properties.Resources.End_SoLong,
-                    Properties.Resources.End_StaySafe
+                _byeFiles = new[] {
+                    "End_ByeNow.wav",
+                    "End_DriveSafe.wav",
+                    "End_NiceDay.wav",
+                    "End_NiveDay2.wav",
+                    "End_SoLong.wav",
+                    "End_StaySafe.wav"
                 };
-            }
-            catch (Exception ex)
-            {
-                _byeList = new List<UnmanagedMemoryStream>();
-                Logger.Info("MMISound: bye resources failed to load: " + ex.Message);
-            }
-            try
-            {
-                _okayList = new List<UnmanagedMemoryStream> {
-                    Properties.Resources.Mid_ICanDoThat,
-                    Properties.Resources.Mid_ILookIntoit,
-                    Properties.Resources.Mid_IWillDoMyBest,
-                    Properties.Resources.Mid_Okay,
-                    Properties.Resources.Mid_Sure,
-                    Properties.Resources.Mid_WeCanDoThat,
-                    Properties.Resources.Mid_WeCanHandleThat
+                _okayFiles = new[] {
+                    "Mid_ICanDoThat.wav",
+                    "Mid_ILookIntoit.wav",
+                    "Mid_IWillDoMyBest.wav",
+                    "Mid_Okay.wav",
+                    "Mid_Sure.wav",
+                    "Mid_WeCanDoThat.wav",
+                    "Mid_WeCanHandleThat.wav"
                 };
+                _noMoneyFiles = new[] { "NoMoney.wav" };
             }
             catch (Exception ex)
             {
-                _okayList = new List<UnmanagedMemoryStream>();
-                Logger.Info("MMISound: okay resources failed to load: " + ex.Message);
-            }
-            try
-            {
-                _noMoneyList = new List<UnmanagedMemoryStream> { Properties.Resources.NoMoney };
-            }
-            catch (Exception ex)
-            {
-                _noMoneyList = new List<UnmanagedMemoryStream>();
-                Logger.Info("MMISound: noMoney resources failed to load: " + ex.Message);
+                _helloFiles = new string[0];
+                _byeFiles = new string[0];
+                _okayFiles = new string[0];
+                _noMoneyFiles = new string[0];
+                Logger.Info("MMISound: failed to initialise file lists: " + ex.Message);
             }
         }
 
         public static void Play(SoundFamily family)
         {
-            List<UnmanagedMemoryStream> list = new List<UnmanagedMemoryStream>();
+            string[] files;
             if (family == SoundFamily.Hello)
-                list.AddRange(_helloList);
+                files = _helloFiles;
             else if (family == SoundFamily.Okay)
-                list.AddRange(_okayList);
+                files = _okayFiles;
             else if (family == SoundFamily.Bye)
-                list.AddRange(_byeList);
+                files = _byeFiles;
             else if (family == SoundFamily.NoMoney)
-                list.AddRange(_noMoneyList);
-
-            if (list.Count == 0)
+                files = _noMoneyFiles;
+            else
                 return;
 
-            int index = _rnd.Next(0, list.Count - 1);
+            if (files == null || files.Length == 0)
+                return;
 
-            try
+            string path = Path.Combine(SoundsDir, files[_rnd.Next(0, files.Length)]);
+            int vol = _volume;
+            if (vol < 0) vol = 0;
+            if (vol > 100) vol = 100;
+
+            // Queue on a background thread so the calling script does not
+            // block. The closure keeps the FileStream alive for the
+            // duration, preventing the GC race.
+            System.Threading.ThreadPool.QueueUserWorkItem(_ =>
             {
-                UnmanagedMemoryStream stream = list[index];
-
-                if (_volume < 0) _volume = 0;
-                if (_volume > 100) _volume = 100;
-
-                // Queue on a background thread so the calling script does not
-                // block. PlaySync is still used for deterministic disposal, but
-                // the closure keeps WaveStream and SoundPlayer alive until
-                // playback finishes -- no GC race.
-                UnmanagedMemoryStream captured = stream;
-                int vol = _volume;
-                System.Threading.ThreadPool.QueueUserWorkItem(_ =>
+                try
                 {
-                    captured.Position = 0L;
-                    using (WaveStream ws = new WaveStream(captured))
+                    using (FileStream fs = File.OpenRead(path))
+                    using (WaveStream ws = new WaveStream(fs))
                     {
                         ws.Volume = vol;
                         using (SoundPlayer player = new SoundPlayer(ws))
@@ -130,12 +113,12 @@ namespace MMI_SP.iFruit
                             player.PlaySync();
                         }
                     }
-                });
-            }
-            catch (Exception e)
-            {
-                Logger.Error(family.ToString() + " n\u00b0" + index.ToString() + ". " + e.Message);
-            }
+                }
+                catch (Exception e)
+                {
+                    Logger.Error("MMISound Play: " + path + " - " + e.Message);
+                }
+            });
         }
     }
 }
