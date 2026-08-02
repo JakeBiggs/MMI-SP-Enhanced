@@ -60,16 +60,31 @@ namespace MMI_SP.iFruit
             int index = _rnd.Next(0, list.Count - 1);
 
             try
-            {
-                UnmanagedMemoryStream stream = list[index];
-                stream.Position = 0L;
-                WaveStream wvStream = new WaveStream(stream);   
-                                                              
-                if (_volume < 0) _volume = 0;
-                if (_volume > 100) _volume = 100;
-                wvStream.Volume = _volume;
-                new SoundPlayer(wvStream).Play();              
-            }
+                        {
+                            UnmanagedMemoryStream stream = list[index];
+                            stream.Position = 0L;
+
+                            if (_volume < 0) _volume = 0;
+                            if (_volume > 100) _volume = 100;
+
+                            // PlaySync blocks until the clip finishes, then the using
+                            // disposers run deterministically. The old code used
+                            // SoundPlayer.Play() which spawns a background thread and
+                            // returns immediately -- the WaveStream and SoundPlayer
+                            // were then eligible for GC, and the GC finalizer could
+                            // close the underlying stream while the playback thread
+                            // was still reading from it. On SHVDN-Enhanced's
+                            // ThreadPool task scheduler, that race hits frequently
+                            // enough to crash the script that owns the phone menu.
+                            using (WaveStream wvStream = new WaveStream(stream))
+                            {
+                                wvStream.Volume = _volume;
+                                using (SoundPlayer player = new SoundPlayer(wvStream))
+                                {
+                                    player.PlaySync();
+                                }
+                            }
+                        }
             catch (Exception e)
             {
                 Logger.Error(family.ToString() + " n°" + index.ToString() + ". " + e.Message);
