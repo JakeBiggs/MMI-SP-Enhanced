@@ -22,11 +22,19 @@ static class Logger
     {
         try
         {
-            // File.Create truncates if it exists -- exactly the original
-            // behaviour we want at mod startup.
-            using (FileStream fs = File.Create(logFilePath))
+            // FileMode.Create truncates if it exists. FileShare.ReadWrite
+            // lets AMSI / Defender keep their scan handles open on the
+            // file without causing a sharing-violation collision on ours.
+            // (File.Create's default is FileShare.None, which is why the
+            // startup log write was failing with "used by another process"
+            // on the Legion Go install.)
+            using (FileStream fs = new FileStream(logFilePath,
+                                                  FileMode.Create,
+                                                  FileAccess.Write,
+                                                  FileShare.ReadWrite))
             {
-                fs.Close();
+                // Dispose (via using) flushes + closes. The file is now
+                // truncated and ready for per-line appends.
             }
         }
         catch (Exception ex)
@@ -83,7 +91,19 @@ static class Logger
     {
         try
         {
-            File.AppendAllText(LogFilePath, DateTime.Now + " : " + message + Environment.NewLine);
+            // Explicit FileStream with FileShare.ReadWrite: same rationale
+            // as ResetLogFile. File.AppendAllText's default is
+            // FileShare.Read, which is compatible with AMSI reads in
+            // practice, but using ReadWrite explicitly is belt-and-braces
+            // for any scanner that might open with FileShare.Write.
+            using (FileStream fs = new FileStream(LogFilePath,
+                                                  FileMode.Append,
+                                                  FileAccess.Write,
+                                                  FileShare.ReadWrite))
+            using (StreamWriter sw = new StreamWriter(fs))
+            {
+                sw.Write(DateTime.Now + " : " + message + Environment.NewLine);
+            }
         }
         catch
         {
