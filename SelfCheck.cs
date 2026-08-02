@@ -90,7 +90,13 @@ namespace MMI_SP
 
                 if (File.Exists(dependency.FullPath))
                 {
-                    Version installedVersion = new Version(FileVersionInfo.GetVersionInfo(dependency.FullPath).ProductVersion);
+                    string productVersion = FileVersionInfo.GetVersionInfo(dependency.FullPath).ProductVersion;
+                    if (string.IsNullOrWhiteSpace(productVersion))
+                    {
+                        Logger.Debug($"{dependency.FileName} has no version info -- skipping check.");
+                        continue;
+                    }
+                    Version installedVersion = new Version(productVersion);
                     
                     Logger.Debug($"{dependency.FileName} version: {installedVersion} (expected {dependency.Version})");
 
