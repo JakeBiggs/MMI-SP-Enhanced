@@ -12,14 +12,15 @@ Tired of losing your 500k$ fully modded vehicle because you went on a mission an
 The original MMI-SP mod (v1.2.1, 2018) does not work on GTA V **Enhanced** (the new 2025 edition). This fork fixes every known issue:
 
 - **IO errors on db.xml** -- moved the database to `%LOCALAPPDATA%\MMI-SP\` to avoid Windows Defender AMSI file locks inside Program Files
-- **SE.Extender crash** -- rebuilt SHVDN-Extender from source with logging redirected to `%LOCALAPPDATA%`
-- **SoundPlay crash** -- fixed a race condition in MMISound where the WaveStream was garbage-collected during playback
-- **TypeInitializationException** -- switched resource serialization to BinaryFormatter (built into .NET Framework) instead of requiring an external NuGet DLL
+- **SE.Extender crash** -- rebuilt SHVDN-Extender from source with logging redirected to `%LOCALAPPDATA%\MMI-SP\`
+- **SoundPlay crash** -- fixed a race condition in MMISound where the WaveStream was garbage-collected during playback; playback now runs on a background thread so the phone doesn't freeze when MMI answers
+- **TypeInitializationException** -- WAVs are no longer embedded resources. They load from `scripts/MMI/sounds/`, removing the System.Resources.Extensions NuGet dependency (whose .NET 8 DLLs conflicted with .NET Framework 4.8)
 - **Missing menu text** -- added 41 missing language strings for the Config menu and Plate Change submenu
 - **Persistent vehicle fix** -- vehicles are properly persisted across sessions
 - **Concurrent save fix** -- added a lock around db.xml mutations to prevent lost updates when SHVDN-Enhanced runs scripts on a shared ThreadPool
-
-All dependencies are bundled. No external DLLs to hunt down.
+- **White squares / missing contact icons on the phone** -- updated iFruitAddon2 to v3.1.1 (Bob74's Enhanced-compatible build)
+- **Agency NullReferenceException** -- null guards on the office state in the Agency menu
+- **FormatException on startup** -- removed the SelfCheck and Updater code that pinged Bob74's GitHub for version checks (the upstream repo no longer maintains MMI-SP)
 
 ---
 
@@ -27,7 +28,7 @@ All dependencies are bundled. No external DLLs to hunt down.
 
 **Requirements:**
 - GTA V **Enhanced** (the new edition, not Legacy)
-- [ScriptHookV](http://www.dev-c.com/gta5/scripthookv/) (Enhanced build, v3889.0+)
+- [ScriptHookV](http://www.dev-c.com/gta5/scripthookv/) (Enhanced build)
 - [ScriptHookVDotNet Enhanced](https://github.com/Chiheb-Bacha/ScriptHookVDotNetEnhanced) (Chiheb-Bacha fork)
 
 **Steps:**
@@ -46,6 +47,8 @@ All dependencies are bundled. No external DLLs to hunt down.
          config.ini
          default.xml
          insurance.png
+         sounds\
+           23 WAV voice clips
    ```
 3. Launch the game. Press **Up** on the d-pad (or the phone key) to open the phone, then call **Mors Mutual Insurance**.
 4. Your insured vehicles database is stored at `%LOCALAPPDATA%\MMI-SP\db.xml` -- this survives mod updates and game reinstalls.
@@ -54,14 +57,14 @@ All dependencies are bundled. No external DLLs to hunt down.
 
 ## Building from source
 
-**Requirements:** .NET 8+ SDK, .NET Framework 4.8 reference assemblies
+**Requirements:** .NET SDK, .NET Framework 4.8 reference assemblies
 
 ```bash
 cd src/MMI-SP-Enhanced
 dotnet build -c Release
 ```
 
-The output is `bin/Release/MMI-SP.dll`. The extender is pre-built (source at `extender-release/`).
+The output is `bin/Release/MMI-SP.dll` (126 KB, no embedded assets -- sounds load from disk). The extender is pre-built (source at `extender-release/`). iFruitAddon2 is bundled at `deps/`.
 
 ---
 
@@ -70,11 +73,13 @@ The output is `bin/Release/MMI-SP.dll`. The extender is pre-built (source at `ex
 ### Enhanced Edition fixes (August 2026)
 - Moved db.xml to `%LOCALAPPDATA%\MMI-SP\` to avoid AMSI file locks
 - Rebuilt SHVDN-Extender from source with LocalAppData logging
-- Fixed MMISound WaveStream GC race (PlaySync + using)
-- Switched resource serialization to BinaryFormatter (no external NuGet DLL)
+- Fixed MMISound WaveStream GC race (background-thread playback)
+- WAVs load from `scripts/MMI/sounds/` -- no System.Resources.Extensions dependency
 - Added 41 missing language strings for Config menu and Plate Change
 - Lock around db.xml mutate+save for ThreadPool safety
-- `IsVehicleInsured` reads from cached `_dbFile` instead of disk
+- Updated iFruitAddon2 to v3.1.1 (Enhanced compatible)
+- Null guards on Agency office state
+- Removed SelfCheck and Updater (dead Bob74 infra, caused FormatException)
 
 ### Original changelog (by Bob74)
 
@@ -101,7 +106,7 @@ The output is `bin/Release/MMI-SP.dll`. The extender is pre-built (source at `ex
 
 ## Credits
 
-- **Bob74** -- original MMI-SP mod and SHVDN-Extender
+- **Bob74** -- original MMI-SP mod, SHVDN-Extender, and iFruitAddon2
 - **Jake Biggs** -- Enhanced Edition fixes and bundled release
 - **Chiheb-Bacha** -- ScriptHookVDotNet Enhanced fork
 - **Alexander Blade** -- ScriptHookV
