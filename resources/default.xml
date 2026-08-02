@@ -56,5 +56,48 @@
       <NotifyVehicleRecoveredTitle>IMPORTANT</NotifyVehicleRecoveredTitle>
       <NotifyVehicleRecoveredSubtitle>You need to ~h~store your vehicle~h~ in your garage to avoid any problem.</NotifyVehicleRecoveredSubtitle>
     </UpdateInsurance>
+    <MenuConfig>
+      <ConfigMenuTitle>MMI Configuration</ConfigMenuTitle>
+      <ConfigMenuSubtitle>Settings</ConfigMenuSubtitle>
+      <ConfigMenuContact>MMI Settings</ConfigMenuContact>
+      <ConfigMenuItemGeneral>General</ConfigMenuItemGeneral>
+      <ConfigMenuGeneralLanguage>Language</ConfigMenuGeneralLanguage>
+      <ConfigMenuGeneralPersistent>Persistent insured vehicles</ConfigMenuGeneralPersistent>
+      <ConfigMenuItemNotify>Notifications</ConfigMenuItemNotify>
+      <ConfigMenuNotifyUpdate>Check for update</ConfigMenuNotifyUpdate>
+      <ConfigMenuNotifySHVDN>ScriptHookVDotNet notification</ConfigMenuNotifySHVDN>
+      <ConfigMenuNotifyFile>Missing file notification</ConfigMenuNotifyFile>
+      <ConfigMenuNotifyVisualC>Visual C++ notification</ConfigMenuNotifyVisualC>
+      <ConfigMenuNotifyNET>.NET Framework notification</ConfigMenuNotifyNET>
+      <ConfigMenuNotifyReboot>Restart the game to apply changes.</ConfigMenuNotifyReboot>
+      <ConfigMenuItemInsurance>Insurance</ConfigMenuItemInsurance>
+      <ConfigMenuInsuranceInsurance>Insure cost multiplier</ConfigMenuInsuranceInsurance>
+      <ConfigMenuInsuranceInsuranceEx>(base cost x multiplier)</ConfigMenuInsuranceInsuranceEx>
+      <ConfigMenuInsuranceRecover>Recover cost multiplier</ConfigMenuInsuranceRecover>
+      <ConfigMenuInsuranceRecoverEx>(base cost x multiplier)</ConfigMenuInsuranceRecoverEx>
+      <ConfigMenuInsuranceStolen>Stolen cost multiplier</ConfigMenuInsuranceStolen>
+      <ConfigMenuInsuranceStolenEx>(base cost x multiplier)</ConfigMenuInsuranceStolenEx>
+      <ConfigMenuItemBringVehicle>Bring Vehicle</ConfigMenuItemBringVehicle>
+      <ConfigMenuBringVehiclePrice>Base price</ConfigMenuBringVehiclePrice>
+      <ConfigMenuBringVehicleRadius>Radius</ConfigMenuBringVehicleRadius>
+      <ConfigMenuBringVehicleTimeout>Timeout (seconds)</ConfigMenuBringVehicleTimeout>
+      <ConfigMenuBringVehicleInstantTrue>Instant: Yes</ConfigMenuBringVehicleInstantTrue>
+      <ConfigMenuBringVehicleInstantFalse>Instant: No</ConfigMenuBringVehicleInstantFalse>
+      <ConfigMenuiFruitPhoneVolume>Phone volume</ConfigMenuiFruitPhoneVolume>
+      <ConfigMenuiFruitInsure>Insure via phone</ConfigMenuiFruitInsure>
+      <ConfigMenuiFruitCancel>Cancel via phone</ConfigMenuiFruitCancel>
+      <ConfigMenuiFruitRecover>Recover via phone</ConfigMenuiFruitRecover>
+      <ConfigMenuiFruitStolen>Report stolen via phone</ConfigMenuiFruitStolen>
+      <ConfigMenuiFruitPlate>Change plate via phone</ConfigMenuiFruitPlate>
+    </MenuConfig>
+    <PlateChange>
+      <PlateChange>Change license plate</PlateChange>
+      <PlateChangeDesc>Change the license plate of an insured vehicle.</PlateChangeDesc>
+      <PlateChangeItemEmptyDesc>You don't have any insured vehicle.</PlateChangeItemEmptyDesc>
+      <PlateChangeUpdateDB>Updating database</PlateChangeUpdateDB>
+      <PlateChangeUpdateDBDesc>Please wait...</PlateChangeUpdateDBDesc>
+      <NotifyPlateChanged>License plate changed</NotifyPlateChanged>
+      <NotifyWrongPlate>Invalid plate format.</NotifyWrongPlate>
+    </PlateChange>
   </Strings>
 </MMI>
