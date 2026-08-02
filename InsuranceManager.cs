@@ -220,9 +220,19 @@ namespace MMI_SP
         /// hold _dbLock. (Monitor is reentrant so this is safe to call from
         /// inside the lock.)
         ///
-        /// Atomicity: writes to db.xml.tmp first, then uses File.Replace
+        /// Strategy: write new content to db.xml.tmp, then use File.Replace
         /// to swap. If a crash happens mid-write, the original db.xml is
         /// untouched (the rename is atomic on the same NTFS volume).
+        ///
+        /// IMPORTANT: Windows Defender (and other AV) can hold the file open
+        /// for scanning on every write. File.Replace needs exclusive access
+        /// to the destination for the rename step -- if Defender has a handle
+        /// open, File.Replace fails with ERROR_SHARING_VIOLATION ("used by
+        /// another process"). When that happens, fall back to direct write
+        /// (overwrite) -- not crash-safe but unblocks the mod. The
+        /// scripts/MMI folder is excluded from Defender on the Legion Go
+        /// target install; this fallback is for cases where the exclusion
+        /// isn't applied.
         /// </summary>
         private void SaveDBFileLocked()
         {
@@ -231,14 +241,29 @@ namespace MMI_SP
             {
                 _dbFile.Save(tempPath);
 
-                if (!File.Exists(_dbFilePath))
+                try
                 {
-                    // First-ever save: just rename the .tmp into place.
-                    File.Move(tempPath, _dbFilePath);
+                    if (!File.Exists(_dbFilePath))
+                    {
+                        // First-ever save: just rename the .tmp into place.
+                        File.Move(tempPath, _dbFilePath);
+                    }
+                    else
+                    {
+                        File.Replace(tempPath, _dbFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    }
+                    return;
                 }
-                else
+                catch (Exception replaceEx)
                 {
-                    File.Replace(tempPath, _dbFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+                    // Fallback: direct overwrite. NOT crash-safe (a crash
+                    // mid-write can corrupt db.xml), but unblocks the mod
+                    // when Defender or another scanner has db.xml open.
+                    Logger.Info("Info: SaveDBFileLocked - atomic replace failed (" + replaceEx.Message + "), falling back to direct write.");
+                    _dbFile.Save(_dbFilePath);
+                    // Clean up the .tmp leftover so the next atomic save
+                    // can start clean.
+                    try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
                 }
             }
             catch (Exception ex)
