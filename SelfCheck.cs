@@ -171,7 +171,10 @@ namespace MMI_SP
             Logger.Debug("Retrieving highest Visual C++ version...");
             foreach (string file in files)
             {
-                Version currentFileVersion = new Version(FileVersionInfo.GetVersionInfo(file).ProductVersion);
+                string productVersion = FileVersionInfo.GetVersionInfo(file).ProductVersion;
+                if (string.IsNullOrWhiteSpace(productVersion))
+                    continue;
+                Version currentFileVersion = new Version(productVersion);
                 if (currentFileVersion > highestVersion) highestVersion = currentFileVersion;
             }
             Logger.Debug($"Highest Visual C++ version found: {highestVersion}");
