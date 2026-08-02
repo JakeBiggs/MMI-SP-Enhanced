@@ -154,6 +154,11 @@ namespace MMI_SP.Agency
             _menuMMI = new MenuMMI();
             _menuMMI.Mainmenu.OnMenuClose += (sender) =>
             {
+                if (_office == null)
+                {
+                    ExitAgency();
+                    return;
+                }
                 if (_office.itemsCollection.Type == ItemsManager.CollectionType.Night)
                 {
                     _office.NpcSay(DialogueManager.SpeechType.OfficeNaughtyBye);
@@ -253,8 +258,11 @@ namespace MMI_SP.Agency
             SE.UI.WaitAndhideUI(1000);
 
             // Removing office
-            _office.CleanUp();
-            _office = null;
+            if (_office != null)
+            {
+                _office.CleanUp();
+                _office = null;
+            }
 
             // Teleport the player to the entrance
             Game.Player.Character.FreezePosition = false;
