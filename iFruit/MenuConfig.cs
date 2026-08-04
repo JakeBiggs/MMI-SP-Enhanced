@@ -130,7 +130,12 @@ namespace MMI_SP.iFruit
 
             for (float i = startValue; i < stopValue; i += increment)
             {
-                values.Add(Math.Round(i, 1, MidpointRounding.AwayFromZero));
+                // Math.Round returns double. Storing boxed doubles then
+                // unboxing as (float) in the OnListChange handler below
+                // throws InvalidCastException ("Specified cast is not valid")
+                // on every scroll of this list. Store floats instead so the
+                // (float) cast matches the boxed type.
+                values.Add((float)Math.Round(i, 1, MidpointRounding.AwayFromZero));
                 if (!found)
                     if (Math.Round(value, 1, MidpointRounding.AwayFromZero) == Math.Round(i, 1, MidpointRounding.AwayFromZero))
                         found = true;

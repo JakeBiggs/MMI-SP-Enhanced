@@ -70,7 +70,18 @@ namespace MMI_SP.iFruit
                 Logger.Exception(ex);
             }
 
-            _iFruit.Update();
+            // Guarded on purpose: if iFruitAddon2's Update throws, the
+            // exception would escape OnTick and SHVDN aborts the whole
+            // script, freezing whatever phone/UI element was on screen.
+            // A bad frame must never kill the script.
+            try
+            {
+                _iFruit.Update();
+            }
+            catch (Exception ex)
+            {
+                Logger.Exception(ex);
+            }
         }
 
         // Dispose Event
